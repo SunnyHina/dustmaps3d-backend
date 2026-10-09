@@ -199,6 +199,125 @@ curl --fail http://localhost:58123/api/v2/dust/batch \
 - 可见性日期包含首尾，最多七天；自定义台站用 `longitude`、`latitude`、`altitude_m`，自定义目标用 `coord_system: "icrs"` 或 `"galactic"` 和 `lon`、`lat`。时区使用 IANA 名称，正确处理夏令时；X 轴是从本地零点开始的实际经过小时。Astropy 使用内置 IERS 表，超出有效期会降低精度，响应包含说明。
 - CMS 附件与数据库中的图片 URL 不自动重写。部署时应确保这些 URL 可访问，或由调用方映射到配置的附件服务。
 
+## 绘图接口
+
+以下 POST 接口接收 JSON，完成绘图后返回 PNG 地址。路径均以 `/api/v2` 开头；可直接使用上一节的请求体示例。
+
+| 接口 | 图片内容 | 必要数据／依赖 |
+| --- | --- | --- |
+| `POST /plots/car` | 指定经纬度范围、距离区间的尘埃天区图 | 模型 Parquet |
+| `POST /plots/sin` | 以中心点和视场选择天区，支持气泡区域标记 | 模型 Parquet、Java、STILTS |
+| `POST /plots/ort` | 银河笛卡尔坐标系中的正交切片 | 模型 FITS |
+| `POST /plots/dpr` | 给定角度、偏移和厚度的斜切片，可叠加超级气泡截面 | 三维网格 Parquet；叠加时配置气泡 CSV |
+| `POST /bubbles/analyze` | 气泡内圆与外环的密度曲线、差值及峰值分析图 | 模型 FITS |
+| `POST /bubbles/schematic` | 内圆和外环的几何示意图 | 无科学数据依赖 |
+| `POST /visibility/calculate` | 目标、太阳及可选月球的高度角随时间变化图 | 无尘埃数据依赖 |
+
+### 天区图：CAR 与 SIN
+
+两种天区图都必须提供 `d_min`、`d_max`，单位 kpc，满足 `0 <= d_min < d_max`。`coord_system` 默认为 `galactic`（银道坐标），也可选 `equatorial`（赤道坐标）。经度范围为 `[0, 360]`，纬度范围为 `[-90, 90]`，角度单位均为度。
+
+| 接口 | 参数 | 含义与约束 |
+| --- | --- | --- |
+| CAR | `lon_min`、`lon_max`、`lat_min`、`lat_max`，必填 | 经纬度边界；纬度必须递增，经度不能相同。银道经度支持跨零点，如 `350 → 10`；赤道经度必须递增 |
+| SIN | `lon_center`、`lat_center`、`fov`，必填 | 中心坐标与视场直径；`0 < fov <= 360`，选区半径为 `fov / 2` |
+| SIN | `mark_region=false`、`bubble_diameter=null` | 启用区域标记；指定气泡角直径时以其一半为标记半径，否则使用 `fov / 5`。角直径范围 `(0, 180]` |
+| SIN | `mark_color="black"`、`show_color_bar=true` | 标记颜色可选 `black`、`white`、`red`、`blue`、`green`、`yellow`；控制色条显示 |
+| 两者 | `smoothing_sigma=0.1` | 角平滑尺度，范围 `[0, 10]` 度，`0` 表示不平滑 |
+
+SIN **只接收中心点与视场，不接收经纬度边界字段**；调用方需要自行确定中心和视场。CAR 与 SIN 的投影不同。SIN 在 `fov >= 180` 且未指定 `bubble_diameter` 时使用全天 Aitoff 投影；局部图会在选区半径外增加显示余量。
+
+### 正交切片：ORT
+
+`POST /plots/ort` 的所有参数均有默认值，位置与范围使用 kpc：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `axis1`、`axis2`、`fixed_axis` | `"x"`、`"y"`、`"z"` | 横轴、纵轴、厚度方向；必须是 `x/y/z` 的不重复排列 |
+| `range1_min/max`、`range2_min/max` | 各 `-2 / 2` | 绘图平面两个方向的范围，必须递增 |
+| `fixed_range_min/max` | `-0.05 / 0.05` | 沿第三轴聚合的范围；两端相等表示单平面 |
+| `resolution_pc` | `10` | 采样间隔，单位 **pc**，必须大于零；越小采样越密 |
+| `smooth_sigma_pc` | `5` | 平滑尺度，单位 **pc**，范围 `[0, 100]` |
+| `aggregate` | `"mean"` | 沿厚度方向使用均值 `mean` 或中位数 `median` |
+
+每个平面方向至少包含一个采样间隔，估算采样总数不得超过 2,000,000；超限时增大 `resolution_pc` 或缩小范围。`smooth_sigma_pc / resolution_pc` 不得超过 100。
+
+### 斜切片：DPR
+
+`POST /plots/dpr` 的所有参数均有默认值：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `angle_degrees` | `60` | XY 平面内切片方向角，范围 `[-360, 360]` 度；沿平面方向为 `(cos θ, sin θ)` |
+| `offset` | `0.3` | 沿法向 `(-sin θ, cos θ)` 的有符号偏移，单位 kpc |
+| `half_width` | `0.1` | 切片半厚度，单位 kpc，必须大于零；完整厚度为其两倍 |
+| `s_range_min/max` | `-3 / 3` | 沿切片方向的显示范围，单位 kpc |
+| `z_range_min/max` | `-0.5 / 0.5` | Z 方向显示范围，单位 kpc |
+| `show_markers` | `true` | 显示图中 `(s=0, z=0)` 参考标记 |
+| `show_superbubbles` | `true` | 叠加配置 CSV 中的气泡截面；设为 `false` 可关闭 |
+
+两个显示范围均须递增。DPR 使用固定 15 pc 网格，不接收 ORT 的 `resolution_pc` 或 `smooth_sigma_pc` 参数；显示范围不改变网格分辨率。未配置气泡 CSV 时不绘制气泡叠加层。
+
+### 尘埃图颜色设置
+
+以下参数适用于 CAR、SIN、ORT、DPR，不适用于气泡分析／示意图和可见性图。
+
+| 参数 | CAR / SIN | ORT | DPR |
+| --- | --- | --- | --- |
+| `norm` | 默认 `hist`；可选 `linear`、`log`、`hist` | 默认 `log`；可选 `linear`、`log` | 仅 `log` |
+| `vmin` / `vmax` | `0.01 / 2` | `0.01 / 5` | `0.05 / 1` |
+| `colormap` | 默认 `Spectral_r` | 默认 `Spectral_r` | 默认 `Spectral_r` |
+
+`vmin`、`vmax` 控制密度色标范围，须满足 `vmin < vmax`，对数色标还要求 `vmin > 0`。`colormap` 可选 `Spectral_r`、`viridis`、`plasma`、`inferno`、`magma`、`cividis`、`Greys`、`rainbow`。
+
+### 气泡分析与示意图
+
+两个接口共用 `diameter`（必填，角直径，单位度，范围 `(0, 180]`）及三个半径系数：`inner_factor=0.25`、`annulus_inner_factor=0.375`、`annulus_outer_factor=0.625`。半径等于 `diameter × factor`，并满足 `0 < inner_factor <= annulus_inner_factor < annulus_outer_factor <= 1`，外环外半径不超过 90 度。
+
+`POST /bubbles/schematic` 仅需要上述几何参数。`POST /bubbles/analyze` 还必须提供：
+
+| 参数 | 含义 |
+| --- | --- |
+| `l`、`b` | 银经、银纬，单位度；仅接受银道坐标 |
+| `d` | 正数参考距离，单位 kpc；当前为必填字段，但不参与分析计算 |
+| `d_low`、`d_up` | 峰值分析的距离窗口，单位 kpc，满足 `0 < d_low < d_up` |
+
+分析图展示内圆／外环平均密度及差值，并标注距离窗口中的峰值结果；响应只提供图片地址，不包含独立的数值拟合结果。分析采样量限制为 2,000,000，超限时缩小角直径或区域系数。绘图不会自动创建气泡记录；保存时需另行调用 `POST /bubbles`。
+
+### 天体可见性图
+
+`POST /visibility/calculate` 必填 `start_date`、`end_date`，格式 `YYYY-MM-DD`，包含首尾日期，最多七天；支持日期范围 `1900-01-01` 至 `2100-12-30`。`timezone` 默认 `Asia/Shanghai`，使用 IANA 时区名。
+
+- 台站：通过 `GET /metadata/observatories` 获取 `observatory` 预设，或提供 `longitude`、`latitude`（度）和 `altitude_m`（米，默认 `0`）。
+- 目标：通过 `GET /metadata/targets` 获取 `target` 预设，或提供 `coord_system`（`icrs` 或 `galactic`）、`lon`、`lat`（度）。
+- `add_moon=true` 默认加入月球曲线；设为 `false` 时不计算月球高度角。
+
+响应含 `plot_url`、`elapsed_hours`、`altitude_deg`、`sun_altitude_deg`、`moon_altitude_deg` 等字段，可直接展示图片或使用序列自行绘制；关闭月球时 `moon_altitude_deg` 为 `null`。计算使用内置 IERS 表，超出其有效期时精度会降低。
+
+### 请求、返回与图片访问
+
+以 SIN 绘图为例：
+
+```bash
+curl --fail http://localhost:58123/api/v2/plots/sin \
+  -H 'Content-Type: application/json' \
+  -d '{"lon_center":120.5,"lat_center":25.3,"fov":2,"d_min":0.1,"d_max":1.5,"mark_region":true,"bubble_diameter":1}'
+```
+
+四类尘埃图及两类气泡图返回相同结构（文件名仅为示例）：
+
+```json
+{"url":"/files/generated-image.png","filename":"generated-image.png"}
+```
+
+随后向响应中的 `url` 发起 GET 请求即可读取或下载 PNG。可见性图改用 `plot_url` 字段。POST 本身返回 JSON，不返回图片字节或 Base64。未设置 `DUSTMAPS_PUBLIC_BASE_URL` 时，`/files/...` 应相对于**后端服务地址**解析；前后端域名不同时，配置该变量或由前端拼接后端地址。结果文件目录由 `DUSTMAPS_OUTPUT_DIR` 决定。
+
+所有绘图请求均拒绝未定义字段。参数错误或超过采样限制返回 `422`；科学数据／依赖不可用或计算并发达到上限返回 `503`；STILTS 超时返回 `504`。详细错误见响应的 `detail` 字段；并发超限时同时返回 `Retry-After`。
+
+### 三维交互展示
+
+`GET /viewer/config` 提供元数据、气泡元数据、分块索引及资源地址；`GET /viewer/assets/{filename}` 提供 JSON／BIN 文件。部署时配置 `DUSTMAPS_VIEWER_DIR`。这些接口不生成三维视图 PNG；体渲染、气泡三维展示、旋转与缩放由前端实现。
+
 ## 运行边界
 
 `DUSTMAPS_COMPUTE_WORKERS` 默认 1，`DUSTMAPS_MAX_PENDING_COMPUTATIONS` 默认 4；后者限制同时处理／等待的科学计算请求及模板下载请求，超限返回 503 和 `Retry-After`。科学请求等待结果后返回，没有持久化任务队列或任务轮询接口。`DUSTMAPS_COMPUTE_TIMEOUT_SECONDS` **仅限制 STILTS 子进程**；其他计算通过输入范围、样本量、并发数量限制资源，不承诺统一执行超时。
