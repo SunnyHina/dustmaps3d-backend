@@ -12,10 +12,36 @@ from astropy.table import Table
 from pydantic import ValidationError
 
 from dustmaps_backend import science
-from dustmaps_backend.scientific import BubbleSchematic, CarPlot, DustQuery, OrtPlot, execute
+from dustmaps_backend.scientific import BubbleSchematic, CarPlot, DustQuery, OrtPlot, SinPlot, execute
 
 
 class ScientificTests(unittest.TestCase):
+    def test_sin_accepts_negative_longitude_and_rejects_nonfinite_centers(self):
+        base = dict(lat_center=0, fov=10, d_min=0.3, d_max=0.5)
+        for frame in ("galactic", "equatorial"):
+            for longitude in (-180, -5, 0, 355, 360):
+                with self.subTest(frame=frame, longitude=longitude):
+                    plot = SinPlot(coord_system=frame, lon_center=longitude, **base)
+                    self.assertEqual(plot.lon_center, longitude)
+        for longitude in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(longitude=longitude), self.assertRaises(ValidationError):
+                SinPlot(lon_center=longitude, **base)
+
+    def test_car_longitude_bounds_preserve_negative_and_full_sky_ranges(self):
+        base = dict(lat_min=-5, lat_max=5, d_min=0.3, d_max=0.5)
+        for frame in ("galactic", "equatorial"):
+            for low, high in [(-5, 5), (-15, -5), (-180, 180), (0, 360)]:
+                with self.subTest(frame=frame, low=low, high=high):
+                    plot = CarPlot(coord_system=frame, lon_min=low, lon_max=high, **base)
+                    self.assertEqual((plot.lon_min, plot.lon_max), (low, high))
+        self.assertEqual(CarPlot(lon_min=355, lon_max=5, **base).lon_min, 355)
+        for bounds in [dict(lon_min=float("nan"), lon_max=5),
+                       dict(lon_min=-5, lon_max=float("inf")),
+                       dict(lon_min=-5, lon_max=-5),
+                       dict(coord_system="equatorial", lon_min=355, lon_max=5)]:
+            with self.subTest(bounds=bounds), self.assertRaises(ValidationError):
+                CarPlot(**bounds, **base)
+
     def test_model_derivative_and_blank_distance_batch_round_trip(self):
         # A synthetic, nonzero four-cloud sightline checks the numerical equations
         # independently of the production dataset and upload serialization.
