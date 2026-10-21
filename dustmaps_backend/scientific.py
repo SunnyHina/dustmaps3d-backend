@@ -61,8 +61,8 @@ class SkyPlot(PlotStyle):
 
 
 class CarPlot(SkyPlot):
-    lon_min: Longitude
-    lon_max: Longitude
+    lon_min: float
+    lon_max: float
     lat_min: Latitude
     lat_max: Latitude
 
@@ -76,7 +76,7 @@ class CarPlot(SkyPlot):
 
 
 class SinPlot(SkyPlot):
-    lon_center: Longitude
+    lon_center: float
     lat_center: Latitude
     fov: Annotated[float, Field(gt=0, le=360)]
     bubble_diameter: Annotated[float, Field(gt=0, le=180)] | None = None

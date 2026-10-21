@@ -219,8 +219,8 @@ curl --fail http://localhost:58123/api/v2/dust/batch \
 
 | 接口 | 参数 | 含义与约束 |
 | --- | --- | --- |
-| CAR | `lon_min`、`lon_max`、`lat_min`、`lat_max`，必填 | 经纬度边界；纬度必须递增，经度不能相同。银道经度支持跨零点，如 `350 → 10`；赤道经度必须递增 |
-| SIN | `lon_center`、`lat_center`、`fov`，必填 | 中心坐标与视场直径；`0 < fov <= 360`，选区半径为 `fov / 2` |
+| CAR | `lon_min`、`lon_max`、`lat_min`、`lat_max`，必填 | 经度边界接受有限数值，包括负数（如 `-5 → 5`）；纬度必须递增，经度不能相同。银道经度支持跨零点，如 `350 → 10`；赤道经度必须递增 |
+| SIN | `lon_center`、`lat_center`、`fov`，必填 | 中心经度接受有限数值，包括负数（如 `-5`）；`0 < fov <= 360`，选区半径为 `fov / 2` |
 | SIN | `mark_region=false`、`bubble_diameter=null` | 启用区域标记；指定气泡角直径时以其一半为标记半径，否则使用 `fov / 5`。角直径范围 `(0, 180]` |
 | SIN | `mark_color="black"`、`show_color_bar=true` | 标记颜色可选 `black`、`white`、`red`、`blue`、`green`、`yellow`；控制色条显示 |
 | 两者 | `smoothing_sigma=0.1` | 角平滑尺度，范围 `[0, 10]` 度，`0` 表示不平滑 |
